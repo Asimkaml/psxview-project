@@ -1,7 +1,11 @@
-node_modules
-frontend/node_modules
-backend/.venv
-.env
-__pycache__
+__pycache__/
 *.pyc
-.psxviewai_dev.db
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+backend/.env
+*.db
+.DS_Store
