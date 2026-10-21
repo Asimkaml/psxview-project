@@ -1,49 +1,27 @@
-"""Database setup: SQLAlchemy engine, session factory, and init helper."""
-from __future__ import annotations
-
-from contextlib import contextmanager
-from typing import Generator
-
+"""Database engine + session. SQLite file by default (zero setup)."""
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from config import config
+from config import DATABASE_URL
 
-engine = create_engine(config.database_url, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=_args)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
 
 
-def init_db() -> None:
-    """Create all tables.
+def get_db():
+    """FastAPI dependency: one DB session per request, always closed."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-    Called on app startup; safe to run multiple times.
-    """
-    # Import models so their metadata is registered on Base.
-    import models  # noqa: F401,WPS433
 
+def init_db():
+    import models  # noqa: F401  (import registers the tables on Base)
     Base.metadata.create_all(bind=engine)
-
-
-@contextmanager
-def session_scope() -> Generator[Session, None, None]:
-    """Provide a transactional scope around a series of operations."""
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency that yields a database session."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()

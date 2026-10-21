@@ -20,74 +20,37 @@ def build_prompt(inp: dict, res: dict) -> str:
         "Mention one limitation of this method. Finish with: 'Educational only, not advice.'\n\n"
         f"Company: {inp['symbol']}\n"
         f"EPS/FCF per share: Rs {inp['eps']}\nCurrent price: Rs {inp['price']}\n"
-        f"Risk-free rate: {inp['rf_pct']:.1f}%\n"
-        f"Equity risk premium: {inp['erp_pct']:.1f}%\n"
-        f"Beta: {inp['beta']:.2f}\n"
-        f"Forecast years: {inp['years']}\n"
-        f"Explicit growth assumption: {inp['growth_pct']:.1f}% per year\n"
-        f"Terminal growth assumption: {inp['terminal_pct']:.1f}% per year\n"
         f"Required return (CAPM): {res['required_return_pct']:.1f}%\n"
-        f"Implied growth baked into price: {implied_txt} per year\n"
-        f"DCF fair value per share: Rs {res['fair_value']:.2f}\n"
-        f"Upside/downside vs price: {res['upside_pct']:.1f}%\n"
+        f"Projection years: {inp['years']}\n"
+        f"Growth the market price already implies: {implied_txt} per year\n"
+        f"User's growth estimate: {inp['growth_pct']}% per year, terminal growth {inp['terminal_pct']}%\n"
+        f"Fair value at user's estimate: Rs {res['fair_value']:.0f} ({res['upside_pct']:+.0f}% vs price)\n"
     )
 
 
-def _fallback_text(inp: dict, res: dict) -> dict:
+def fallback_text(inp: dict, res: dict) -> str:
     implied = res["implied_growth_pct"]
-    implied_txt = "more than 500%" if implied is None else f"{implied:.1f}%"
-    return {
-        "source": "fallback",
-        "text": (
-            f"This DCF takes Rs {inp['eps']} per share and grows it at {inp['growth_pct']:.1f}% "
-            f"for {inp['years']} years, then {inp['terminal_pct']:.1f}% forever. Using a required "
-            f"return of {res['required_return_pct']:.1f}%, it estimates fair value around "
-            f"Rs {res['fair_value']:.2f} per share, which is {res['upside_pct']:.1f}% versus the "
-            f"current price of Rs {inp['price']}. The current price implies {implied_txt} annual "
-            "growth. This is a simplified model and small changes in inputs can move the value a lot. "
-            "Educational only, not advice."
-        ),
-    }
+    a = ("The price needs more than 500% yearly growth to make sense." if implied is None
+         else f"The current price already assumes about {implied:.1f}% yearly growth.")
+    b = (f"At your {inp['growth_pct']}% estimate, fair value is Rs {res['fair_value']:.0f}, "
+         f"which is {abs(res['upside_pct']):.0f}% {'above' if res['upside_pct'] >= 0 else 'below'} the price.")
+    return f"{a} {b} Educational only, not advice."
 
 
 def explain(inp: dict, res: dict) -> dict:
-    """Ask Gemini to explain the valuation; fall back to safe text on any error."""
-
-    api_key = config.settings.gemini_api_key
-    model = config.settings.gemini_model
-
-    if not api_key or not model:
-        log.warning("Gemini API key or model missing; using fallback explanation.")
-        return _fallback_text(inp, res)
-
-    prompt = build_prompt(inp, res)
-
-    headers = {"x-goog-api-key": api_key}
-    body = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                ]
-            }
-        ]
-    }
-
-    url = URL.format(model=model)
-
+    if not config.GEMINI_API_KEY:
+        return {"text": fallback_text(inp, res), "source": "fallback"}
     try:
-        with httpx.Client(timeout=10.0) as client:
-            r = client.post(url, headers=headers, json=body)
-        if r.status_code == 404:
-            log.error("Gemini model not found (404). Check GEMINI_MODEL setting.")
+        r = httpx.post(
+            URL.format(model=config.GEMINI_MODEL),
+            headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": build_prompt(inp, res)}]}],
+                  "generationConfig": {"temperature": 0.3, "maxOutputTokens": 400}},
+            timeout=20,
+        )
         r.raise_for_status()
-        data = r.json()
-        text = "".join(part.get("text", "") for
-                        cand in data.get("candidates", [])
-                        for part in cand.get("content", {}).get("parts", []))
-        if not text.strip():
-            raise ValueError("Empty response from Gemini")
-        return {"source": "gemini", "text": text}
-    except Exception as exc:  # noqa: BLE001
-        log.error("Gemini explanation failed, falling back: %s", exc)
-        return _fallback_text(inp, res)
+        text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return {"text": text, "source": "gemini"}
+    except Exception as e:  # network, quota, bad JSON ... never crash the page
+        log.warning("Gemini failed: %s", type(e).__name__)
+        return {"text": fallback_text(inp, res), "source": "fallback"}

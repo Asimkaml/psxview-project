@@ -24,11 +24,6 @@ log = logging.getLogger("psxviewai")
 app = FastAPI(title="PSXviewAI API", version="0.2.0")
 
 
-@app.on_event("startup")
-async def _init_db() -> None:
-    """Initialize database tables on startup."""
-    init_db()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -36,7 +31,8 @@ app.add_middleware(
         "http://localhost:5174", "http://127.0.0.1:5174",
         "http://localhost:4173", "http://127.0.0.1:4173",
     ],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_credentials=True,
     allow_headers=["*"],
 )
 
@@ -90,9 +86,13 @@ def get_news() -> Tuple[List[Dict], List[Dict]]:
 async def _warmup():
     """Pre-fetch on startup so the first request isn't slow."""
     import asyncio
+    init_db()  # create database tables if they do not exist yet
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, get_companies)
-    await loop.run_in_executor(None, get_news)
+    for fn in (get_companies, get_news):
+        try:
+            await loop.run_in_executor(None, fn)
+        except Exception:
+            log.exception("Warmup of %s failed; will retry on first request", fn.__name__)
 
 
 app.include_router(auth.router)

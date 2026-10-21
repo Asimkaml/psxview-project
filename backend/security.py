@@ -1,56 +1,54 @@
-"""Security helpers: password hashing, JWT handling, and OTP utilities."""
-from __future__ import annotations
-
-import datetime as dt
+"""Password hashing, signed tokens, OTP helpers."""
+import hashlib
+import hmac
 import secrets
-from typing import Literal, Optional
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
 
-from config import config
-
-JwtKind = Literal["challenge", "session"]
+from config import JWT_ALG, JWT_SECRET
 
 
-def hash_password(password: str) -> str:
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
-def verify_password(password: str, hashed: str) -> bool:
+def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        return bcrypt.checkpw(plain.encode(), hashed.encode())
     except ValueError:
         return False
 
 
-def create_token(sub: str, kind: JwtKind, ttl_seconds: int) -> str:
-    now = dt.datetime.utcnow()
-    payload = {
-        "sub": sub,
-        "kind": kind,
-        "iat": int(now.timestamp()),
-        "exp": int((now + dt.timedelta(seconds=ttl_seconds)).timestamp()),
-    }
-    return jwt.encode(payload, config.jwt_secret, algorithm=config.jwt_algorithm)
+def make_token(user_id: int, kind: str, minutes: int) -> str:
+    """kind = 'challenge' (password OK, waiting for 2FA) or 'session' (fully logged in)."""
+    now = datetime.now(timezone.utc)
+    payload = {"sub": str(user_id), "kind": kind, "iat": now, "exp": now + timedelta(minutes=minutes)}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
-def create_challenge_token(sub: str) -> str:
-    return create_token(sub, "challenge", config.jwt_challenge_ttl_seconds)
+def read_token(token: str, kind: str) -> int | None:
+    """Return the user id if the token is valid AND of the expected kind, else None."""
+    try:
+        data = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.PyJWTError:
+        return None
+    if data.get("kind") != kind:
+        return None
+    try:
+        return int(data["sub"])
+    except (KeyError, ValueError):
+        return None
 
 
-def create_session_token(sub: str) -> str:
-    return create_token(sub, "session", config.jwt_session_ttl_seconds)
-
-
-def decode_token(token: str, expected_kind: Optional[JwtKind] = None) -> dict:
-    payload = jwt.decode(token, config.jwt_secret, algorithms=[config.jwt_algorithm])
-    if expected_kind and payload.get("kind") != expected_kind:
-        raise jwt.InvalidTokenError("wrong token kind")
-    return payload
-
-
-def generate_otp_code() -> str:
-    """Generate a 6-digit numeric OTP code as a string."""
+def new_otp() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_otp(code: str) -> str:
+    return hmac.new(JWT_SECRET.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def same(a: str, b: str) -> bool:
+    return hmac.compare_digest(a, b)

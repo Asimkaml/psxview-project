@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import AccountModal from './components/AccountModal'
 import Header from './components/Header'
 import MarketSnapshot from './components/MarketSnapshot'
+import ValuationPage from './components/ValuationPage'
 import SourcesModal from './components/SourcesModal'
 import Toast from './components/Toast'
 import { DataProvider, useData } from './context/DataContext'
+import { AuthProvider } from './context/AuthContext'
 import type { AccountTab } from './types'
 
 function AppContent() {
@@ -17,6 +19,7 @@ function AppContent() {
     tab: 'login',
   })
   const [toast, setToast] = useState<string | null>(null)
+  const [view, setView] = useState<'market' | 'valuation'>('market')
 
   const announcement = active !== null ? announcements[active] ?? null : null
   const highlightSymbol = announcement?.symbol ?? null
@@ -79,7 +82,12 @@ function AppContent() {
         active={active}
         tickerPaused={tickerPaused}
         onTickerItemClick={toggleAnnouncement}
+        onValuationClick={() => {
+          setActive(null)
+          setView('valuation')
+        }}
         onAnnouncementsClick={() => {
+          setView('market')
           window.scrollTo({ top: 0 })
           setActive(0)
         }}
@@ -91,11 +99,15 @@ function AppContent() {
         }}
       />
 
-      <MarketSnapshot
-        range={range}
-        onRangeChange={setRange}
-        highlightSymbol={highlightSymbol}
-      />
+      {view === 'market' ? (
+        <MarketSnapshot
+          range={range}
+          onRangeChange={setRange}
+          highlightSymbol={highlightSymbol}
+        />
+      ) : (
+        <ValuationPage onNeedLogin={() => openAccount('login')} />
+      )}
 
       {sourcesIndex !== null && (
         <SourcesModal
@@ -120,8 +132,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <DataProvider>
-      <AppContent />
-    </DataProvider>
+    <AuthProvider>
+      <DataProvider>
+        <AppContent />
+      </DataProvider>
+    </AuthProvider>
   )
 }

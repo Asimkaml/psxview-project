@@ -838,3 +838,6 @@ input {
     scroll-behavior: auto;
   }
 }
+.linkbtn { background: none; border: 0; color: var(--blue); font-weight: 600; padding: 6px 0; text-decoration: underline; }
+.who { color: #dbe5ff; font-size: 14px; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }

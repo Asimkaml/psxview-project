@@ -1,181 +1,143 @@
-"""Authentication router: register/login with password + OTP 2FA and sessions."""
-from __future__ import annotations
+"""Register / login / 2FA / me / logout."""
+from datetime import timedelta, timezone
 
-import datetime as dt
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr
-from sqlalchemy import and_, select
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from config import config
+import config
+import emailer
 from db import get_db
-from emailer import send_otp_email
-from models import OtpCode, User
-from security import (
-    create_challenge_token,
-    create_session_token,
-    decode_token,
-    generate_otp_code,
-    hash_password,
-    verify_password,
-)
+from models import OtpCode, User, utcnow
+from security import (hash_otp, hash_password, make_token, new_otp, read_token,
+                      same, verify_password)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+# ---------- request / response shapes ----------
 class RegisterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=72)   # 72 = bcrypt limit
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=72)
 
 
 class OtpIn(BaseModel):
-    token: str
-    code: str
+    challenge_token: str
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class ChallengeIn(BaseModel):
+    challenge_token: str
 
 
 class UserOut(BaseModel):
     id: int
-    email: EmailStr
+    name: str
+    email: str
 
 
-def _issue_session(response: Response, user: User) -> dict:
-    token = create_session_token(str(user.id))
-    response.set_cookie(
-        key=config.cookie_name,
-        value=token,
-        httponly=True,
-        secure=config.cookie_secure,
-        samesite="lax",
-    )
-    return {"id": user.id, "email": user.email}
+# ---------- helpers ----------
+def _issue_otp(db: Session, user: User) -> str:
+    """Invalidate older codes, create a new one, email it, return a challenge token."""
+    for old in db.scalars(select(OtpCode).where(OtpCode.user_id == user.id, OtpCode.used == False)):  # noqa: E712
+        old.used = True
+    code = new_otp()
+    db.add(OtpCode(user_id=user.id, code_hash=hash_otp(code),
+                   expires_at=utcnow() + timedelta(minutes=config.OTP_MINUTES)))
+    db.commit()
+    emailer.send_otp(user.email, code)
+    return make_token(user.id, "challenge", config.OTP_MINUTES)
 
 
-@router.post("/register")
-def register(data: RegisterIn, db: Session = Depends(get_db)):
-    existing = db.scalar(select(User).where(User.email == data.email))
-    if existing:
-        raise HTTPException(400, "Email already registered")
+def _aware(dt):
+    """SQLite returns naive datetimes; treat them as UTC so comparisons work."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
-    user = User(email=data.email, password_hash=hash_password(data.password))
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Use as a dependency on any route that needs a logged-in user."""
+    token = request.cookies.get(config.COOKIE_NAME)
+    uid = read_token(token, "session") if token else None
+    user = db.get(User, uid) if uid else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return user
+
+
+# ---------- routes ----------
+@router.post("/register", status_code=201)
+def register(body: RegisterIn, db: Session = Depends(get_db)):
+    email = body.email.lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Email already registered")
+    user = User(email=email, name=body.name.strip(), password_hash=hash_password(body.password))
     db.add(user)
     db.commit()
-    db.refresh(user)
-
-    code = generate_otp_code()
-    now = dt.datetime.utcnow()
-    otp = OtpCode(
-        user_id=user.id,
-        code=code,
-        purpose="register",
-        created_at=now,
-        expires_at=now + dt.timedelta(minutes=10),
-    )
-    db.add(otp)
-    db.commit()
-
-    send_otp_email(user.email, code)
-
-    token = create_challenge_token(str(user.id))
-    return {"challenge_token": token}
+    return {"challenge_token": _issue_otp(db, user)}
 
 
 @router.post("/login")
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == form.username))
-    if not user or not verify_password(form.password, user.password_hash):
-        raise HTTPException(400, "Invalid email or password")
-
-    code = generate_otp_code()
-    now = dt.datetime.utcnow()
-    otp = OtpCode(
-        user_id=user.id,
-        code=code,
-        purpose="login",
-        created_at=now,
-        expires_at=now + dt.timedelta(minutes=10),
-    )
-    db.add(otp)
-    db.commit()
-
-    send_otp_email(user.email, code)
-
-    token = create_challenge_token(str(user.id))
-    return {"challenge_token": token}
+def login(body: LoginIn, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    # Same error for "no such user" and "wrong password" so attackers learn nothing.
+    if not user or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"challenge_token": _issue_otp(db, user)}
 
 
-def _consume_otp(db: Session, user: User, code: str, purpose: str) -> None:
-    now = dt.datetime.utcnow()
-    stmt = select(OtpCode).where(
-        and_(
-            OtpCode.user_id == user.id,
-            OtpCode.purpose == purpose,
-            OtpCode.code == code,
-            OtpCode.expires_at >= now,
-            OtpCode.consumed_at.is_(None),
-        )
-    ).order_by(OtpCode.id.desc())
-    otp = db.scalars(stmt).first()
-    if not otp:
-        raise HTTPException(400, "Invalid or expired code")
-    otp.consumed_at = now
-    db.add(otp)
-    db.commit()
-
-
-@router.post("/verify-otp")
-def verify_otp(data: OtpIn, response: Response, db: Session = Depends(get_db)):
-    try:
-        payload = decode_token(data.token, expected_kind="challenge")
-    except Exception:
-        raise HTTPException(400, "Invalid challenge token")
-
-    user_id = int(payload.get("sub"))
-    user = db.get(User, user_id)
-    if not user or not user.is_active:
-        raise HTTPException(400, "User not found")
-
-    _consume_otp(db, user, data.code, purpose="login")
-
-    return _issue_session(response, user)
-
-
-def _get_session_user(db: Session, token: str) -> Optional[User]:
-    from jwt import InvalidTokenError, ExpiredSignatureError
-
-    try:
-        payload = decode_token(token, expected_kind="session")
-    except (InvalidTokenError, ExpiredSignatureError):
-        return None
-    user_id = int(payload.get("sub"))
-    user = db.get(User, user_id)
-    if not user or not user.is_active:
-        return None
-    return user
-
-
-def get_current_user(response: Response, db: Session = Depends(get_db)) -> User:
-    from fastapi import Cookie
-
-    token: Optional[str] = Cookie(default=None, alias=config.cookie_name)
-    if not token:
-        raise HTTPException(401, "Not authenticated")
-    user = _get_session_user(db, token)
+@router.post("/resend-otp")
+def resend_otp(body: ChallengeIn, db: Session = Depends(get_db)):
+    uid = read_token(body.challenge_token, "challenge")
+    user = db.get(User, uid) if uid else None
     if not user:
-        # Clear cookie on invalid session
-        response.delete_cookie(config.cookie_name)
-        raise HTTPException(401, "Not authenticated")
-    return user
+        raise HTTPException(status_code=401, detail="Login step expired, start again")
+    return {"challenge_token": _issue_otp(db, user)}
 
 
-@router.post("/logout")
-def logout(response: Response):
-    response.delete_cookie(config.cookie_name)
-    return {"ok": True}
+@router.post("/verify-otp", response_model=UserOut)
+def verify_otp(body: OtpIn, response: Response, db: Session = Depends(get_db)):
+    uid = read_token(body.challenge_token, "challenge")
+    user = db.get(User, uid) if uid else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Login step expired, start again")
+
+    otp = db.scalar(select(OtpCode).where(OtpCode.user_id == user.id, OtpCode.used == False)  # noqa: E712
+                    .order_by(OtpCode.id.desc()))
+    if not otp or _aware(otp.expires_at) < utcnow():
+        raise HTTPException(status_code=400, detail="Code expired, request a new one")
+    if otp.attempts >= config.OTP_MAX_ATTEMPTS:
+        otp.used = True
+        db.commit()
+        raise HTTPException(status_code=429, detail="Too many wrong codes, request a new one")
+
+    if not same(otp.code_hash, hash_otp(body.code)):
+        otp.attempts += 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="Wrong code")
+
+    otp.used = True
+    db.commit()
+    response.set_cookie(
+        config.COOKIE_NAME, make_token(user.id, "session", config.SESSION_MINUTES),
+        max_age=config.SESSION_MINUTES * 60, httponly=True, samesite="lax",
+        secure=config.COOKIE_SECURE, path="/",
+    )
+    return UserOut(id=user.id, name=user.name, email=user.email)
 
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
-    return UserOut(id=user.id, email=user.email)
+    return UserOut(id=user.id, name=user.name, email=user.email)
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(config.COOKIE_NAME, path="/")
+    return {"ok": True}

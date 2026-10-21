@@ -1,36 +1,24 @@
-"""Simple OTP email sender.
-
-In development, when SMTP_HOST is empty, we just log the OTP instead of
-sending a real email. This keeps the flow testable without credentials.
-"""
-from __future__ import annotations
-
+"""Send the 2FA code. No SMTP configured -> print to the server log (dev mode)."""
 import logging
 import smtplib
 from email.message import EmailMessage
 
-from config import config
+import config
 
-log = logging.getLogger("psxviewai.emailer")
+log = logging.getLogger("psxviewai.email")
 
 
-def send_otp_email(to_email: str, code: str) -> None:
-    subject = "Your PSXviewAI login code"
-    body = f"Your one-time code is: {code}\n\nIt expires in 10 minutes."
-
-    if not config.smtp_host:
-        # Development / test mode: just log the code.
-        log.info("OTP for %s: %s", to_email, code)
+def send_otp(to_email: str, code: str) -> None:
+    if not config.SMTP_HOST:
+        log.warning("DEV MODE - 2FA code for %s is %s", to_email, code)
         return
-
     msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = config.smtp_from or (config.smtp_user or "no-reply@localhost")
+    msg["Subject"] = "Your PSXviewAI verification code"
+    msg["From"] = config.SMTP_FROM
     msg["To"] = to_email
-    msg.set_content(body)
-
-    with smtplib.SMTP(config.smtp_host, config.smtp_port) as server:
-        server.starttls()
-        if config.smtp_user and config.smtp_password:
-            server.login(config.smtp_user, config.smtp_password)
-        server.send_message(msg)
+    msg.set_content(f"Your code is {code}. It expires in {config.OTP_MINUTES} minutes.")
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as s:
+        s.starttls()
+        if config.SMTP_USER:
+            s.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        s.send_message(msg)
