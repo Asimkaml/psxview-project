@@ -14,10 +14,20 @@ from news_service import process_pipeline_news
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import auth
+import valuation
+from db import init_db
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("psxviewai")
 
 app = FastAPI(title="PSXviewAI API", version="0.2.0")
+
+
+@app.on_event("startup")
+async def _init_db() -> None:
+    """Initialize database tables on startup."""
+    init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,6 +85,7 @@ def get_news() -> Tuple[List[Dict], List[Dict]]:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.on_event("startup")
 async def _warmup():
     """Pre-fetch on startup so the first request isn't slow."""
@@ -82,6 +93,10 @@ async def _warmup():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_companies)
     await loop.run_in_executor(None, get_news)
+
+
+app.include_router(auth.router)
+app.include_router(valuation.router)
 
 
 @app.get("/api/health")

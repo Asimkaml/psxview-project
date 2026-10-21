@@ -1,4 +1,5 @@
-/* Ported from PSXviewAI – Home.html. Same tokens + class names so React markup maps 1:1. */
+/* Ported from PSXviewAI – Home.html. Same tokens + class names so React markup maps 1:1.
+   Light theme only: no dark-mode overrides; color-scheme is forced to light via :root. */
 :root {
   --bg: #f5f7fb;
   --surface: #fff;
@@ -18,44 +19,7 @@
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #0a1120;
-    --surface: #111b30;
-    --ink: #e8edf7;
-    --mute: #93a1ba;
-    --line: #22304d;
-    --navy: #060c19;
-    --blue: #7da2ff;
-    --blue-soft: #17264a;
-    --up: #3fd48f;
-    --up-soft: #0f2a20;
-    --down: #ff7b7b;
-    --down-soft: #341618;
-    --amber: #f0b44c;
-    --amber-soft: #2e2410;
-    --on: #06101f;
-    color-scheme: dark;
-  }
-}
-:root[data-theme='dark'] {
-  --bg: #0a1120;
-  --surface: #111b30;
-  --ink: #e8edf7;
-  --mute: #93a1ba;
-  --line: #22304d;
-  --navy: #060c19;
-  --blue: #7da2ff;
-  --blue-soft: #17264a;
-  --up: #3fd48f;
-  --up-soft: #0f2a20;
-  --down: #ff7b7b;
-  --down-soft: #341618;
-  --amber: #f0b44c;
-  --amber-soft: #2e2410;
-  --on: #06101f;
-  color-scheme: dark;
+  color-scheme: light;
 }
 * {
   box-sizing: border-box;
