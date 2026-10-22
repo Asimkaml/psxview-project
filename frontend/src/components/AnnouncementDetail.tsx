@@ -74,7 +74,7 @@ export default function AnnouncementDetail({
               )}
             </span>
             <button className="src" onClick={onViewSources}>
-              View sources
+              View original sources
             </button>
           </div>
         </div>

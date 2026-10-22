@@ -2,6 +2,11 @@
 .vwrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
 .vwrap h1 { font-size: clamp(22px, 5vw, 30px); margin: 0 0 4px; letter-spacing: -0.5px; }
 .v-sub { color: var(--mute); margin: 0 0 16px; font-size: 14px; }
+.v-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.v-title-row .v-sub { margin-bottom: 0; }
+.v-mode { display: flex; flex: none; gap: 4px; padding: 4px; border-radius: 11px; background: var(--surface); border: 1px solid var(--line); }
+.v-mode button { border: 0; border-radius: 8px; padding: 7px 12px; background: transparent; color: var(--mute); font-size: 13px; font-weight: 700; }
+.v-mode button.on { background: var(--blue); color: #fff; }
 .v-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(11, 23, 48, 0.05); }
 .v-card h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mute); }
 .v-center { text-align: center; padding: 40px 18px; }
@@ -10,10 +15,18 @@
 @media (max-width: 640px) { .v-grid3, .v-grid2 { grid-template-columns: 1fr; } }
 .vwrap label { display: block; font-size: 12px; font-weight: 600; color: var(--mute); }
 .vwrap input[type='number'], .vwrap select { display: block; width: 100%; margin-top: 4px; padding: 9px 11px; border: 1.5px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; }
+.vwrap input[readonly] { background: var(--bg); color: var(--ink); cursor: default; }
 .vwrap input[type='number']:focus, .vwrap select:focus { outline: none; border-color: var(--blue); }
+.v-source { display: block; margin-top: 4px; color: var(--up); font-size: 11px; font-weight: 600; }
 .v-slider .v-row { display: flex; justify-content: space-between; font-size: 13px; }
 .v-slider b { color: var(--blue); font-variant-numeric: tabular-nums; }
 .v-slider input[type='range'] { width: 100%; accent-color: var(--blue); }
+.v-scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+.v-scenarios button { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--ink); text-align: left; }
+.v-scenarios button span { color: var(--mute); font-size: 12px; }
+.v-scenarios button.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+.v-assumption-note { margin: 14px 0 0; padding: 9px 11px; border-radius: 9px; background: var(--bg); color: var(--mute); font-size: 12px; }
+.v-field-title { margin: 16px 0 4px; color: var(--mute); font-size: 12px; font-weight: 600; }
 .v-years { display: flex; gap: 8px; margin-top: 14px; }
 .v-years button { flex: 1; padding: 9px 0; border-radius: 10px; border: 1.5px solid var(--line); background: var(--bg); color: var(--mute); font-weight: 600; }
 .v-years button.on { background: var(--blue-soft); border-color: var(--blue); color: var(--blue); }
@@ -23,6 +36,10 @@
 .v-big strong { display: block; font-size: clamp(30px, 8vw, 40px); letter-spacing: -1px; line-height: 1.15; color: var(--navy); }
 .v-big .up { color: var(--up); font-weight: 600; }
 .v-big .down { color: var(--down); font-weight: 600; }
+.v-verdict { display: inline-block; margin: 7px 0 3px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.v-verdict.up { background: var(--up-soft); color: var(--up); }
+.v-verdict.down { background: var(--down-soft); color: var(--down); }
+.v-verdict.neutral { background: var(--blue-soft); color: var(--blue); }
 .v-chart { position: relative; height: 240px; margin-top: 14px; }
 .v-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .vbtn { border: 0; border-radius: 10px; padding: 10px 18px; font-weight: 600; background: var(--blue); color: #fff; }
@@ -41,3 +58,9 @@
 .linkbtn { background: none; border: 0; color: var(--blue); font-weight: 600; padding: 6px 0; text-decoration: underline; }
 .who { color: #dbe5ff; font-size: 14px; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+@media (max-width: 640px) {
+  .v-title-row { align-items: stretch; flex-direction: column; }
+  .v-mode { align-self: flex-start; }
+  .v-scenarios { grid-template-columns: 1fr; }
+  .v-scenarios button { align-items: center; flex-direction: row; justify-content: space-between; }
+}

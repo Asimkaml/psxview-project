@@ -1,5 +1,6 @@
 """AI explanation of a valuation via Gemini REST. Falls back to plain text if AI fails."""
 import logging
+import time
 
 import httpx
 
@@ -40,17 +41,38 @@ def fallback_text(inp: dict, res: dict) -> str:
 def explain(inp: dict, res: dict) -> dict:
     if not config.GEMINI_API_KEY:
         return {"text": fallback_text(inp, res), "source": "fallback"}
-    try:
-        r = httpx.post(
-            URL.format(model=config.GEMINI_MODEL),
-            headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": build_prompt(inp, res)}]}],
-                  "generationConfig": {"temperature": 0.3, "maxOutputTokens": 400}},
-            timeout=20,
-        )
-        r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return {"text": text, "source": "gemini"}
-    except Exception as e:  # network, quota, bad JSON ... never crash the page
-        log.warning("Gemini failed: %s", type(e).__name__)
-        return {"text": fallback_text(inp, res), "source": "fallback"}
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            r = httpx.post(
+                URL.format(model=config.GEMINI_MODEL),
+                headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": build_prompt(inp, res)}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 1200,
+                        "thinkingConfig": {"thinkingLevel": "low"},
+                    },
+                },
+                timeout=30,
+            )
+            r.raise_for_status()
+            candidate = r.json()["candidates"][0]
+            text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+            if not text:
+                raise ValueError(f"Gemini returned no text ({candidate.get('finishReason', 'unknown')})")
+            return {"text": text, "source": "gemini"}
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            status = e.response.status_code
+            log.warning("Gemini request failed with HTTP %s (attempt %s/3)", status, attempt + 1)
+            if status != 429 and status < 500:
+                break
+        except Exception as e:  # network or malformed provider response
+            last_error = e
+            log.warning("Gemini request failed: %s (attempt %s/3)", type(e).__name__, attempt + 1)
+        if attempt < 2:
+            time.sleep(attempt + 1)
+
+    log.warning("Using valuation fallback after Gemini failure: %s", type(last_error).__name__)
+    return {"text": fallback_text(inp, res), "source": "fallback"}
