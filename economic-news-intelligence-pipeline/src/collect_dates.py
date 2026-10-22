@@ -15,6 +15,12 @@ def parse_entry_published_datetime(
     summary: str,
     source_timezone: str,
 ) -> tuple[datetime | None, str | None, set[str]]:
+    """
+    Extract the most reliable published datetime from a feed entry.
+
+    Tries multiple common feed date fields in order of preference.
+    Returns (datetime, raw_value, set_of_fields_considered).
+    """
     candidates = [
         ("published", entry.get("published")),
         ("pubDate", entry.get("pubDate")),
@@ -64,6 +70,12 @@ def parse_entry_published_datetime(
     return None, None, fields
 
 def parse_date_from_text(text: str) -> date | None:
+    """
+    Try to find a calendar date embedded in arbitrary text.
+
+    Useful for detecting old story republication from URLs or headlines.
+    Returns None if no valid date is found.
+    """
     import re
 
     patterns = [
@@ -109,6 +121,11 @@ def item_dates(
     source_timezone: str,
     target_timezone: str,
 ) -> tuple[date | None, date | None]:
+    """
+    Convert a published datetime into both source-timezone and target-timezone dates.
+
+    Returns (source_date, target_date), or (None, None) if published is missing.
+    """
     if not published:
         return None, None
     source_dt = published.astimezone(ZoneInfo(source_timezone))
@@ -122,6 +139,13 @@ def possible_republished_old_story(
     summary: str,
     published_date: date | None,
 ) -> bool:
+    """
+    Detect whether an article might be a republication of an older story.
+
+    Compares the feed's published_date with any date found in the URL or title.
+    If the embedded date is more than 2 days earlier than the published date,
+    the story is likely recycled.
+    """
     if not published_date:
         return False
     embedded_date = parse_date_from_text(f"{url} {title}")

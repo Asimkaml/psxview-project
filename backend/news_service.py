@@ -17,13 +17,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("psxviewai.news")
 
+# Paths to the sibling pipeline directory and its output snapshots.
 BASE_DIR = Path(__file__).resolve().parent.parent
 PIPELINE_DIR = BASE_DIR / "economic-news-intelligence-pipeline"
 OUTPUT_DIR = PIPELINE_DIR / "output"
 
+# Symbols tracked by the app for news mapping.
 WATCHLIST_SYMBOLS = ["OGDC", "PPL", "MARI", "HBL", "ENGRO", "LUCK", "FFC"]
 
-# Mapping keywords / companies to watchlist symbols and sectors
+# Mapping of watchlist symbols to their company/sector keywords.
 WATCHLIST_MAPPING = {
     "OGDC": {
         "keywords": ["ogdc", "oil & gas development company", "oil and gas development company"],
@@ -55,7 +57,7 @@ WATCHLIST_MAPPING = {
     },
 }
 
-# Sector-level fallback associations
+# When no exact company match is found, use sector keywords to still tie a news item to a relevant symbol.
 SECTOR_FALLBACKS = [
     {
         "keywords": ["gas tariff", "circular debt", "petroleum levy", "crude oil", "brent", "drilling", "well discovery", "refinery"],
@@ -79,7 +81,7 @@ SECTOR_FALLBACKS = [
     },
 ]
 
-# Market sentiment lexicon
+# Financial lexicon for deterministic sentiment scoring.
 POSITIVE_TERMS = [
     "rise", "gain", "surplus", "reforms", "growth", "boost", "positive", "approves", "approval",
     "dividend", "profit", "expansion", "record high", "discovery", "payout", "rebound", "upgraded",
@@ -93,7 +95,11 @@ NEGATIVE_TERMS = [
 
 
 def _format_relative_time(pub_str: Optional[str]) -> str:
-    """Format published_at ISO string into 'Today, 9:40 AM' or '20 Oct, 2:15 PM'."""
+    """
+    Format an ISO published-at string into a friendly relative label.
+
+    Examples: 'Today, 9:40 AM', 'Yesterday, 2:15 PM', '20 Oct, 2:15 PM'.
+    """
     if not pub_str:
         return "Recent"
     try:
@@ -102,7 +108,7 @@ def _format_relative_time(pub_str: Optional[str]) -> str:
         now = datetime.now(dt.tzinfo)
         date_fmt = dt.strftime("%d %b").lstrip("0")
         time_fmt = dt.strftime("%I:%M %p").lstrip("0")
-        
+
         if dt.date() == now.date():
             return f"Today, {time_fmt}"
         days_diff = (now.date() - dt.date()).days
@@ -114,9 +120,12 @@ def _format_relative_time(pub_str: Optional[str]) -> str:
 
 
 def _find_symbol_and_sector(title: str, summary: str, tags: List[str]) -> Tuple[str, str, str]:
-    """Identify the matching stock symbol, sector, and scope.
-    
-    Returns (symbol, sector, impact_scope).
+    """
+    Identify the matching stock symbol, sector, and scope.
+
+    Returns a tuple of (symbol, sector, impact_scope).
+    Scope is "stock" for direct company matches, "sector" for sector fallbacks,
+    or "market" for broad macro items.
     """
     text = f"{title} {summary} {' '.join(tags)}".lower()
 
@@ -140,12 +149,18 @@ def _find_symbol_and_sector(title: str, summary: str, tags: List[str]) -> Tuple[
 
 
 def _evaluate_rule_based(title: str, text: str, symbol: str, sector: str, scope: str, item: Dict[str, Any]) -> Dict[str, Any]:
-    """Deterministic financial lexicon evaluation."""
+    """
+    Evaluate impact using deterministic financial keywords.
+
+    Produces direction, sentiment, strength, summary, detail, confidence, and evaluator label.
+    """
     combined = f"{title} {text}".lower()
 
+    # Count positive and negative keyword matches.
     pos_score = sum(1 for term in POSITIVE_TERMS if term in combined)
     neg_score = sum(1 for term in NEGATIVE_TERMS if term in combined)
 
+    # Default verdict from keyword counts.
     if pos_score > neg_score:
         direction = "up"
         sentiment = "Positive"
@@ -162,6 +177,7 @@ def _evaluate_rule_based(title: str, text: str, symbol: str, sector: str, scope:
         summary = "Balanced impact"
         detail = f"Headline suggests steady operational conditions with limited immediate volatility expected for {symbol}."
 
+    # Override verdict for specific high-signal financial themes.
     if "dividend" in combined or "payout" in combined:
         direction = "up"
         sentiment = "Positive"
@@ -190,7 +206,7 @@ def _evaluate_rule_based(title: str, text: str, symbol: str, sector: str, scope:
         summary = "Tariff & pricing review"
         detail = "Regulatory notifications alter producer and consumer realizations across energy and fertilizer value chains."
 
-    # Compute strength (1 = Mild, 2 = Moderate, 3 = High)
+    # Compute strength (1 = Mild, 2 = Moderate, 3 = High) from pipeline scores.
     econ_score = item.get("economic_relevance_score", 0.0)
     market_score = item.get("market_impact_score", 0.0)
     source_weight = item.get("source_weight", 5.0)
@@ -217,7 +233,11 @@ def _evaluate_rule_based(title: str, text: str, symbol: str, sector: str, scope:
 
 
 def _evaluate_llm(title: str, text: str, symbol: str, sector: str, api_key: str, provider: str = "openai") -> Optional[Dict[str, Any]]:
-    """Evaluate using LLM when API is provided."""
+    """
+    Evaluate impact using an LLM when an API key is configured.
+
+    Falls back to None on any error so the caller can use rule-based scoring instead.
+    """
     try:
         prompt = f"""
 You are a senior equity analyst specializing in Pakistan Stock Exchange (PSX).
@@ -316,7 +336,12 @@ def load_latest_pipeline_snapshot() -> Optional[Dict[str, Any]]:
 
 
 def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Process pipeline news items into (Announcements, Sources)."""
+    """
+    Process pipeline news items into (Announcements, Sources).
+
+    Reads the latest snapshot, evaluates each item, and returns up to 15
+    announcement/source pairs for the frontend.
+    """
     snapshot = load_latest_pipeline_snapshot()
     if not snapshot:
         log.warning("No pipeline snapshot found. Returning empty lists.")
@@ -326,7 +351,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
     if not items:
         return [], []
 
-    # Sort items by final_score descending
+    # Sort items by final_score descending so the highest-impact news comes first.
     sorted_items = sorted(items, key=lambda x: x.get("final_score", 0.0), reverse=True)
 
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -343,6 +368,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
         if not title:
             continue
 
+        # Extract and clean the best available snippet text.
         raw_snippet = item.get("summary") or item.get("raw_snippet") or item.get("raw_description") or ""
         snippet = _clean_snippet(raw_snippet)
         tags = item.get("tags") or []
@@ -350,6 +376,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
         source_name = item.get("source") or item.get("original_source") or "Market News"
         pub_at = item.get("published_at") or item.get("published_date") or ""
 
+        # Map this news item to a symbol, sector, and scope.
         symbol, sector, scope = _find_symbol_and_sector(title, snippet, tags)
 
         # If this watchlist symbol is already heavily represented, and we have unassigned watchlist symbols,
@@ -370,6 +397,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
         if not eval_result:
             eval_result = _evaluate_rule_based(title, snippet, symbol, sector, scope, item)
 
+        # Build the frontend announcement object.
         announcement = {
             "symbol": symbol,
             "time": _format_relative_time(pub_at),
@@ -381,7 +409,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
             "detail": eval_result["detail"],
         }
 
-        # Determine source type classification
+        # Determine source type classification based on source name keywords.
         source_type = "News"
         src_lower = source_name.lower()
         if "state bank" in src_lower or "pbs" in src_lower or "secp" in src_lower or "ministry" in src_lower:
@@ -389,6 +417,7 @@ def process_pipeline_news() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
         elif "psx" in src_lower or "notice" in src_lower or "filing" in src_lower:
             source_type = "Filing"
 
+        # Build the frontend source evidence object.
         source_record = {
             "confidence": eval_result.get("confidence", 75),
             "sources": [

@@ -18,12 +18,15 @@ import auth
 import valuation
 from db import init_db
 
+# Set up basic logging so server events are visible in the console.
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("psxviewai")
 
+# Create the FastAPI application instance.
 app = FastAPI(title="PSXviewAI API", version="0.2.0")
 
 
+# Allow the frontend dev servers (Vite) to call this backend with credentials.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -41,17 +44,22 @@ app.add_middleware(
 # psxdata itself for 15 min on disk, so this is just an extra in-process layer)
 # ---------------------------------------------------------------------------
 _CACHE: Dict[str, Any] = {
-    "companies": [],
-    "announcements": [],
-    "sources": [],
-    "ts": 0.0,
-    "news_ts": 0.0,
+    "companies": [],       # cached list of company dicts
+    "announcements": [],   # cached list of news announcements
+    "sources": [],         # cached list of source evidence
+    "ts": 0.0,             # timestamp of last company refresh
+    "news_ts": 0.0,        # timestamp of last news refresh
 }
-CACHE_TTL = 15 * 60   # seconds
-NEWS_CACHE_TTL = 10 * 60  # 10 minutes
+CACHE_TTL = 15 * 60        # seconds: how long company data stays cached
+NEWS_CACHE_TTL = 10 * 60   # seconds: how long news stays cached
 
 
 def get_companies() -> List[Dict]:
+    """
+    Return cached company data, refreshing from psxdata if stale or empty.
+
+    This is a synchronous function called in an executor thread.
+    """
     now = time.time()
     if not _CACHE["companies"] or now - _CACHE["ts"] > CACHE_TTL:
         log.info("Refreshing company data from psxdata …")
@@ -63,6 +71,11 @@ def get_companies() -> List[Dict]:
 
 
 def get_news() -> Tuple[List[Dict], List[Dict]]:
+    """
+    Return cached news + sources, refreshing from pipeline if stale or empty.
+
+    Falls back to mock data if the pipeline returns no items.
+    """
     now = time.time()
     if not _CACHE["announcements"] or now - _CACHE["news_ts"] > NEWS_CACHE_TTL:
         log.info("Refreshing news from economic pipeline …")
@@ -84,7 +97,12 @@ def get_news() -> Tuple[List[Dict], List[Dict]]:
 
 @app.on_event("startup")
 async def _warmup():
-    """Pre-fetch on startup so the first request isn't slow."""
+    """
+    Pre-fetch data on startup so the first user request isn't slow.
+
+    Runs init_db() to create tables, then warms both caches in a thread pool.
+    Failures are logged but do not crash startup; they retry on the first request.
+    """
     import asyncio
     init_db()  # create database tables if they do not exist yet
     loop = asyncio.get_event_loop()
@@ -95,12 +113,18 @@ async def _warmup():
             log.exception("Warmup of %s failed; will retry on first request", fn.__name__)
 
 
+# Include the auth and valuation route modules under their prefixes.
 app.include_router(auth.router)
 app.include_router(valuation.router)
 
 
 @app.get("/api/health")
 def health():
+    """
+    Basic health + cache status endpoint.
+
+    Useful for monitoring and confirming the server is alive and data is loaded.
+    """
     return {
         "status": "ok",
         "cached_at": _CACHE["ts"],
@@ -111,24 +135,31 @@ def health():
 
 @app.get("/api/companies")
 def companies():
+    """Return the cached list of companies with live price/volume/series data."""
     return get_companies()
 
 
 @app.get("/api/announcements")
 def announcements():
+    """Return the cached list of announcements/news items."""
     ann, _ = get_news()
     return ann
 
 
 @app.get("/api/sources")
 def sources():
+    """Return the cached list of source evidence linked to announcements."""
     _, src = get_news()
     return src
 
 
 @app.post("/api/news/refresh")
 def refresh_news():
-    """Manually invalidate news cache and re-read pipeline snapshots."""
+    """
+    Manually invalidate news cache and re-read pipeline snapshots.
+
+    Returns the number of announcements after refresh.
+    """
     _CACHE["news_ts"] = 0.0
     ann, src = get_news()
     return {"refreshed": True, "count": len(ann)}
@@ -136,7 +167,11 @@ def refresh_news():
 
 @app.get("/api/market")
 def market():
-    """Single round-trip bundle the frontend uses on load."""
+    """
+    Single round-trip bundle the frontend uses on initial load.
+
+    Combines companies, announcements, sources, and a representative asOf date.
+    """
     companies = get_companies()
     announcements, sources = get_news()
     as_of = next((c.get("asOf") for c in companies if c.get("asOf")), "")
@@ -149,5 +184,6 @@ def market():
 
 
 if __name__ == "__main__":
+    # Entry point for running the server directly with `python main.py`.
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

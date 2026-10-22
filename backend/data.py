@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 log = logging.getLogger("psxviewai")
 
 # Hard-coded announcements and sources stay as prototype data (AI layer TBD).
+# These are the seven PSX symbols tracked by the app.
 SYMBOLS = ["OGDC", "PPL", "MARI", "HBL", "ENGRO", "LUCK", "FFC"]
 
 # PSX appends a corporate-action suffix to screener symbols (e.g. "OGDC" ->
@@ -29,6 +30,11 @@ _CROP_SUFFIXES = ("XD", "XR", "XB")
 # ---------------------------------------------------------------------------
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
+    """
+    Convert a value to float safely.
+
+    Returns the default if the value is missing, non-numeric, or NaN.
+    """
     try:
         v = float(val)
         # NaN check (NaN != NaN)
@@ -38,6 +44,11 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 
 
 def _fmt_volume(v: float) -> str:
+    """
+    Format a raw volume number into a human-readable string.
+
+    Examples: 1_250_000 -> "1.25M", 3_400 -> "3.4K".
+    """
     if v >= 1_000_000:
         return f"{v / 1_000_000:.2f}M"
     if v >= 1_000:
@@ -54,7 +65,11 @@ def _fmt_date(val: Any) -> str:
 
 
 def _screener_row(symbol: str, screener_df: Any) -> Optional[Any]:
-    """Find a symbol's row in the screener, tolerating XD/XR/XB suffixes."""
+    """
+    Find a symbol's row in the screener, tolerating XD/XR/XB suffixes.
+
+    Returns None if the symbol cannot be found at all.
+    """
     if screener_df is None or getattr(screener_df, "empty", True):
         return None
     if "symbol" not in screener_df.columns:
@@ -70,7 +85,8 @@ def _screener_row(symbol: str, screener_df: Any) -> Optional[Any]:
 
 
 def fetch_company(symbol: str, screener_df: Any = None) -> Optional[Dict]:
-    """Return a live company dict (price, volume, 90-point series, eps, asOf).
+    """
+    Return a live company dict (price, volume, 90-point series, eps, asOf).
 
     Price, volume, and the 90-day close series come from ``psxdata.stocks``;
     the P/E (and thus EPS) comes from the live screener via ``_screener_row``.
@@ -91,6 +107,7 @@ def fetch_company(symbol: str, screener_df: Any = None) -> Optional[Dict]:
             log.warning("%s: empty historical dataframe", symbol)
             return None
 
+        # Normalize column names to lowercase so lookups are case-insensitive.
         df.columns = [c.lower() for c in df.columns]
         close_col = next(
             (c for c in ("close", "ldcp", "last") if c in df.columns), None
@@ -143,9 +160,12 @@ def fetch_company(symbol: str, screener_df: Any = None) -> Optional[Dict]:
 
 
 def build_companies() -> List[Dict]:
-    """Fetch live data for all symbols; fall back to a stub only on failure."""
-    # Fetch the screener once and reuse for every P/E lookup (psxdata caches
-    # it on disk for 15 min, so this is one network round-trip for 7 symbols).
+    """
+    Fetch live data for all symbols; fall back to a stub only on failure.
+
+    The screener is fetched once and reused for every P/E lookup.
+    psxdata caches it on disk for 15 min, so this is one network round-trip for 7 symbols.
+    """
     screener_df = None
     try:
         import psxdata
@@ -164,7 +184,11 @@ def build_companies() -> List[Dict]:
 
 
 def _stub(symbol: str) -> Dict:
-    """Last-resort fallback so the UI never breaks on a total fetch failure."""
+    """
+    Last-resort fallback so the UI never breaks on a total fetch failure.
+
+    Uses hard-coded price, volume, and EPS to build a 90-point synthetic series.
+    """
     stubs = {
         "OGDC":  (312.4,  "1.24M", 39.05),
         "PPL":   (241.8,  "2.1M",  24.93),
@@ -236,37 +260,28 @@ ANNOUNCEMENTS: List[Dict] = [
     },
 ]
 
+# Sources are shown when the user opens the "Sources" view for an announcement.
+# Each entry links to an official or authoritative page for the reader to verify.
 SOURCES: List[Dict] = [
     {"confidence": 86, "sources": [
-        {"title": "PSX company notice",   "type": "Official", "time": "Today, 9:12 AM",    "text": "Board meeting result: interim cash dividend approved for the quarter."},
-        {"title": "OGDC quarterly report","type": "Filing",   "time": "Today, 9:30 AM",    "text": "Profit and cash position are enough to support the payout."},
-        {"title": "Past dividend records","type": "Data",     "time": "Last 4 payouts",    "text": "Amount is close to previous payouts, so the surprise is small."},
+        {"title": "OGDC announcements on PSX", "type": "Official", "time": "Official company record", "text": "Open the PSX company page to review OGDC announcements, financial results and payout records.", "url": "https://dps.psx.com.pk/company/OGDC"},
     ]},
     {"confidence": 72, "sources": [
-        {"title": "Regulator notification","type": "Official","time": "Today, 8:00 AM",    "text": "Revised gas price notification for the sector."},
-        {"title": "PPL annual report",     "type": "Filing",  "time": "FY 2025",           "text": "Gas price share in revenue is limited, so margin change is small."},
-        {"title": "Business news summary", "type": "News",    "time": "Today, 8:40 AM",    "text": "Analysts expect little change in earnings from this revision."},
+        {"title": "PPL announcements on PSX", "type": "Official", "time": "Official company record", "text": "Open the PSX company page to review PPL filings and regulatory announcements.", "url": "https://dps.psx.com.pk/company/PPL"},
     ]},
     {"confidence": 78, "sources": [
-        {"title": "Central bank statement",    "type": "Official","time": "Yesterday, 4:30 PM","text": "Policy rate decision and guidance for the next quarters."},
-        {"title": "HBL financial statements",  "type": "Filing",  "time": "FY 2025",           "text": "Interest income is a large part of earnings, so rate changes matter."},
-        {"title": "Banking sector note",       "type": "News",    "time": "Yesterday, 6:00 PM","text": "Analysts discuss pressure on spreads for large banks."},
+        {"title": "State Bank monetary policy statements", "type": "Official", "time": "Official central-bank record", "text": "Review the original monetary policy statements and supporting documents from the State Bank of Pakistan.", "url": "https://www.sbp.org.pk/our-operations/publications/monetary-policy-statements/501"},
     ]},
     {"confidence": 81, "sources": [
-        {"title": "PSX company notice",   "type": "Official","time": "Yesterday, 11:00 AM","text": "Scheduled plant maintenance completed."},
-        {"title": "ENGRO production update","type":"Filing",  "time": "Yesterday, 11:20 AM","text": "Production restarted earlier than the planned date."},
+        {"title": "ENGRO announcements on PSX", "type": "Official", "time": "Official company record", "text": "Open the PSX company page to review ENGRO announcements and operational updates.", "url": "https://dps.psx.com.pk/company/ENGRO"},
     ]},
     {"confidence": 68, "sources": [
-        {"title": "Industry dispatch data","type": "Data","time": "19 Oct",           "text": "Local dispatches rose, exports fell during the month."},
-        {"title": "Cement sector news",   "type": "News","time": "19 Oct, 2:30 PM",  "text": "Mixed numbers, no strong change expected in earnings."},
+        {"title": "LUCK announcements on PSX", "type": "Official", "time": "Official company record", "text": "Open the PSX company page to review Lucky Cement announcements, reports and financial results.", "url": "https://dps.psx.com.pk/company/LUCK"},
     ]},
     {"confidence": 84, "sources": [
-        {"title": "PSX company notice", "type": "Official","time": "18 Oct, 5:10 PM","text": "New gas well started commercial production."},
-        {"title": "MARI field update",  "type": "Filing",  "time": "18 Oct, 5:30 PM","text": "Added output increases expected sales volume."},
-        {"title": "Energy sector news", "type": "News",    "time": "18 Oct, 7:00 PM","text": "Market expects a gradual price reaction over a few sessions."},
+        {"title": "MARI announcements on PSX", "type": "Official", "time": "Official company record", "text": "Open the PSX company page to review Mari Energies announcements and production updates.", "url": "https://dps.psx.com.pk/company/MARI"},
     ]},
     {"confidence": 70, "sources": [
-        {"title": "Industry offtake data","type": "Data",  "time": "18 Oct",         "text": "Urea offtake slowed compared with last month."},
-        {"title": "FFC sales update",     "type": "Filing","time": "18 Oct, 1:10 PM","text": "Lower offtake may trim next quarter sales slightly."},
+        {"title": "NFDC fertilizer statistics", "type": "Data", "time": "Official industry data", "text": "Review fertilizer production, availability and offtake statistics from the National Fertilizer Development Centre.", "url": "https://nfdc.gov.pk/stat.html"},
     ]},
 ]

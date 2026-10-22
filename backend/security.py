@@ -11,10 +11,20 @@ from config import JWT_ALG, JWT_SECRET
 
 
 def hash_password(plain: str) -> str:
+    """
+    Hash a plain-text password with bcrypt.
+
+    bcrypt is intentionally slow to resist brute-force attacks.
+    """
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """
+    Check a plain-text password against a stored bcrypt hash.
+
+    Returns False if the hash is malformed.
+    """
     try:
         return bcrypt.checkpw(plain.encode(), hashed.encode())
     except ValueError:
@@ -22,14 +32,23 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def make_token(user_id: int, kind: str, minutes: int) -> str:
-    """kind = 'challenge' (password OK, waiting for 2FA) or 'session' (fully logged in)."""
+    """
+    Sign a JWT for a user.
+
+    kind = 'challenge' (password OK, waiting for 2FA) or 'session' (fully logged in).
+    minutes = token lifetime before expiration.
+    """
     now = datetime.now(timezone.utc)
     payload = {"sub": str(user_id), "kind": kind, "iat": now, "exp": now + timedelta(minutes=minutes)}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
 def read_token(token: str, kind: str) -> int | None:
-    """Return the user id if the token is valid AND of the expected kind, else None."""
+    """
+    Validate a JWT and return the user id if valid AND of the expected kind.
+
+    Returns None on any signature, expiry, kind mismatch, or missing subject error.
+    """
     try:
         data = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.PyJWTError:
@@ -43,12 +62,25 @@ def read_token(token: str, kind: str) -> int | None:
 
 
 def new_otp() -> str:
+    """
+    Generate a 6-digit OTP string with leading zeros if needed.
+
+    Uses cryptographically secure randomness.
+    """
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def hash_otp(code: str) -> str:
+    """
+    Hash an OTP using HMAC-SHA256 with the JWT secret as the key.
+
+    Never store the plain OTP; store this hash for comparison.
+    """
     return hmac.new(JWT_SECRET.encode(), code.encode(), hashlib.sha256).hexdigest()
 
 
 def same(a: str, b: str) -> bool:
+    """
+    Compare two strings in constant time to avoid timing attacks.
+    """
     return hmac.compare_digest(a, b)
